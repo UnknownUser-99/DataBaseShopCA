@@ -67,22 +67,7 @@ namespace DataBaseShopCA
             {
                 Database db = new Database();
 
-                try
-                {
-                    db.OpenConnection();
-
-                    db.DataLoad(xmlReader.Orders);
-
-                    Console.WriteLine("Данные загружены");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"При загрузке данных произошла ошибка: {ex.Message}");
-                }
-                finally
-                {
-                    db.CloseConnection();
-                }
+                db.DataLoad(xmlReader.Orders);
             }
             else
             {

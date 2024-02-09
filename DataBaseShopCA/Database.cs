@@ -17,9 +17,11 @@ namespace DataBaseShopCA
         {
             try
             {
-                sqlConnection = new SqlConnection(ConfigurationManager.ConnectionStrings["DBShop"].ConnectionString);
-
-                sqlConnection.Open();
+                if (sqlConnection == null || sqlConnection.State != ConnectionState.Open)
+                {
+                    sqlConnection = new SqlConnection(ConfigurationManager.ConnectionStrings["DBShop"].ConnectionString);
+                    sqlConnection.Open();
+                }
             }
             catch(Exception ex)
             {
@@ -44,26 +46,82 @@ namespace DataBaseShopCA
 
         public void DataLoad(List<Order> orders)
         {
-            foreach (Order xmlOrder in orders)
+            OpenConnection();
+
+            try
             {
-                int userId = UserCheck(xmlOrder);
-                int saleId = InsertSale(userId, xmlOrder);
-                InsertSalesProducts(saleId, xmlOrder.Products);
+                foreach (Order xmlOrder in orders)
+                {
+                    using (SqlTransaction sqlTransaction = sqlConnection.BeginTransaction())
+                    {
+                        try
+                        {
+                            if (!SaleCheck(xmlOrder, sqlTransaction))
+                            {
+                                int userId = UserCheck(xmlOrder, sqlTransaction);
+                                int saleId = InsertSale(userId, xmlOrder, sqlTransaction);
+                                InsertSalesProducts(saleId, xmlOrder.Products, sqlTransaction);
+
+                                sqlTransaction.Commit();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            if (sqlTransaction != null)
+                            {
+                                sqlTransaction.Rollback();
+                            }
+
+                            Console.WriteLine($"Ошибка при выполнении операции: {ex.Message}");
+                        }
+                        finally
+                        {
+                            if (sqlTransaction != null)
+                            {
+                                sqlTransaction.Dispose();
+                            }
+                        }
+                    }
+                }
+
+                Console.WriteLine("Данные загружены.");
+            }
+            finally
+            {
+                CloseConnection();
             }
         }
 
-        private int ProductCheck(Product product)
+        private bool SaleCheck(Order order, SqlTransaction transaction)
+        {
+            using (SqlCommand command = new SqlCommand("SELECT id FROM Sales WHERE id = @orderNumber", sqlConnection, transaction))
+            {
+                command.Parameters.AddWithValue("@orderNumber", order.Number);
+                int result = (int)(command.ExecuteScalar() ?? 0);
+
+                if (result != 0)
+                {
+                    Console.WriteLine($"Заказ с номером {order.Number} уже существует в базе данных.");
+
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
+        private int ProductCheck(Product product, SqlTransaction transaction)
         {
             int productID = 0;
 
-            using (SqlCommand command = new SqlCommand("SELECT id FROM Products WHERE name = @productName", sqlConnection))
+            using (SqlCommand command = new SqlCommand("SELECT id FROM Products WHERE name = @productName", sqlConnection, transaction))
             {
                 command.Parameters.AddWithValue("@productName", product.Name);
                 productID = (int)(command.ExecuteScalar() ?? 0);
 
                 if (productID == 0)
                 {
-                    using (SqlCommand insertCommand = new SqlCommand("INSERT INTO Products (name, price, quantity) OUTPUT INSERTED.id VALUES (@productName, @productPrice, @productQuantity)", sqlConnection))
+                    using (SqlCommand insertCommand = new SqlCommand("INSERT INTO Products (name, price, quantity) OUTPUT INSERTED.id VALUES (@productName, @productPrice, @productQuantity)", sqlConnection, transaction))
                     {
                         insertCommand.Parameters.AddWithValue("@productName", product.Name);
                         insertCommand.Parameters.AddWithValue("@productPrice", product.Price);
@@ -77,11 +135,11 @@ namespace DataBaseShopCA
             return productID;
         }
 
-        private int UserCheck(Order order)
+        private int UserCheck(Order order, SqlTransaction transaction)
         {
             int userID = 0;
 
-            using (SqlCommand command = new SqlCommand("SELECT id FROM Users WHERE name = @userName AND email = @userEmail", sqlConnection))
+            using (SqlCommand command = new SqlCommand("SELECT id FROM Users WHERE name = @userName AND email = @userEmail", sqlConnection, transaction))
             {
                 command.Parameters.AddWithValue("@userName", order.UserName);
                 command.Parameters.AddWithValue("@userEmail", order.UserEmail);
@@ -89,7 +147,7 @@ namespace DataBaseShopCA
 
                 if (userID == 0)
                 {
-                    using (SqlCommand insertCommand = new SqlCommand("INSERT INTO Users (name, email) OUTPUT INSERTED.id VALUES (@userName, @userEmail)", sqlConnection))
+                    using (SqlCommand insertCommand = new SqlCommand("INSERT INTO Users (name, email) OUTPUT INSERTED.id VALUES (@userName, @userEmail)", sqlConnection, transaction))
                     {
                         insertCommand.Parameters.AddWithValue("@userName", order.UserName);
                         insertCommand.Parameters.AddWithValue("@userEmail", order.UserEmail);
@@ -102,12 +160,13 @@ namespace DataBaseShopCA
             return userID;
         }
 
-        private int InsertSale(int userId, Order order)
+        private int InsertSale(int userId, Order order, SqlTransaction transaction)
         {
             int saleID = 0;
 
-            using (SqlCommand command = new SqlCommand("INSERT INTO Sales (user_id, order_price, date) OUTPUT INSERTED.id VALUES (@userId, @orderPrice, @orderDate)", sqlConnection))
+            using (SqlCommand command = new SqlCommand("INSERT INTO Sales (id, user_id, order_price, date) OUTPUT INSERTED.id VALUES (@saleId, @userId, @orderPrice, @orderDate)", sqlConnection, transaction))
             {
+                command.Parameters.AddWithValue("@saleId", order.Number);
                 command.Parameters.AddWithValue("@userId", userId);
                 command.Parameters.AddWithValue("@orderPrice", order.Sum);
                 command.Parameters.AddWithValue("@orderDate", order.Date);
@@ -118,13 +177,13 @@ namespace DataBaseShopCA
             return saleID;
         }
 
-        private void InsertSalesProducts(int saleId, List<Product> products)
+        private void InsertSalesProducts(int saleId, List<Product> products, SqlTransaction transaction)
         {
             foreach (Product product in products)
             {
-                int productID = ProductCheck(product);
+                int productID = ProductCheck(product, transaction);
 
-                using (SqlCommand command = new SqlCommand("INSERT INTO Sales_products (sale_id, product_id, quantity, price) VALUES (@saleId, @productId, @quantity, @price)", sqlConnection))
+                using (SqlCommand command = new SqlCommand("INSERT INTO Sales_products (sale_id, product_id, quantity, price) VALUES (@saleId, @productId, @quantity, @price)", sqlConnection, transaction))
                 {
                     command.Parameters.AddWithValue("@saleId", saleId);
                     command.Parameters.AddWithValue("@productId", productID);
